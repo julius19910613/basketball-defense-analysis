@@ -115,7 +115,7 @@ class AnalysisService:
                     "player": player,
                     "clip_index": clip_index,
                     "start_frame": clip_index * self.settings.vid_stride,
-                    "end_frame": clip_index * self.settings.vid_stride + self.settings.seq_length - 1,
+                    "end_frame": min(clip_index * self.settings.vid_stride + self.settings.seq_length - 1, len(video_frames) - 1),
                     "r2plus1d": prediction,
                     "motion": motion,
                     "vlm": vlm_decision,
@@ -148,13 +148,15 @@ class AnalysisService:
             import cv2
             fps = 30.0
             cap = cv2.VideoCapture(request.video_path)
-            if cap.isOpened():
-                val = cap.get(cv2.CAP_PROP_FPS)
-                if val is not None and val > 0:
-                    fps = val
+            try:
+                if cap.isOpened():
+                    val = cap.get(cv2.CAP_PROP_FPS)
+                    if val is not None and val > 0:
+                        fps = val
+            finally:
                 cap.release()
 
-            video_name = os.path.basename(request.video_path).split(".")[0]
+            video_name = os.path.splitext(os.path.basename(request.video_path))[0]
             video_output_path = os.path.join(self.settings.video_output_dir, f"{video_name}_{analysis_id}.mp4")
             write_annotated_video(
                 video_path=video_output_path,

@@ -46,6 +46,16 @@ def fuse_decision(
         )
 
     if vlm.confidence >= prediction.confidence or prediction.confidence < low_confidence:
+        if vlm.action not in LABEL_TO_ID:
+            needs_review = prediction.confidence < low_confidence
+            return FinalDecisionResponse(
+                action_id=prediction.action_id,
+                action=prediction.action,
+                confidence=prediction.confidence,
+                source="r2plus1d",
+                needs_review=needs_review,
+                reason=f"VLM returned unknown action label: {vlm.action}",
+            )
         action_id = LABEL_TO_ID[vlm.action]
         return FinalDecisionResponse(
             action_id=action_id,

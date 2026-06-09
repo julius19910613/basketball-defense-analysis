@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -25,7 +26,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print("Model loaded successfully. App ready.")
     
     # Mount output directories for static file serving using absolute paths
-    import os
     abs_output_dir = os.path.abspath(settings.output_dir)
     abs_video_output_dir = os.path.abspath(settings.video_output_dir)
     os.makedirs(abs_output_dir, exist_ok=True)

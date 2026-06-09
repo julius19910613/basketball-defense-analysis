@@ -86,7 +86,7 @@ def extract_json_object(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    match = re.search(r"\{[^{}]*\}", text, flags=re.DOTALL)
     if not match:
         raise ValueError("No JSON object found in VLM response")
     return json.loads(match.group(0))

@@ -137,14 +137,19 @@ def extract_tracked_frames(
         player_boxes: List[Tuple[Tuple[float, float, float, float], ...]] = []
 
         frame = first_frame
+        is_first = True
         while True:
             raw_frame = frame.copy()
-            success, tracked_boxes = trackers.update(frame)
-            if not success:
-                fallback = player_boxes[-1] if player_boxes else tuple(tuple(float(v) for v in box) for box in init_boxes)
-                player_boxes.append(fallback)
+            if is_first:
+                player_boxes.append(tuple(tuple(float(v) for v in box) for box in init_boxes))
+                is_first = False
             else:
-                player_boxes.append(tuple(tuple(float(v) for v in box) for box in tracked_boxes))
+                success, tracked_boxes = trackers.update(frame)
+                if not success:
+                    fallback = player_boxes[-1] if player_boxes else tuple(tuple(float(v) for v in box) for box in init_boxes)
+                    player_boxes.append(fallback)
+                else:
+                    player_boxes.append(tuple(tuple(float(v) for v in box) for box in tracked_boxes))
             video_frames.append(raw_frame)
 
             if max_frames is not None and len(video_frames) >= max_frames:

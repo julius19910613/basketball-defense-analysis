@@ -69,7 +69,7 @@ def write_annotated_video(
                     action_id = player_preds[clip_index] if 0 <= clip_index < len(player_preds) else None
 
                 if action_id is not None:
-                    action = LABELS[action_id]
+                    action = LABELS.get(action_id, 'unknown')
                     cv2.putText(
                         frame,
                         action,

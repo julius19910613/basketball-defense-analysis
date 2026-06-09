@@ -100,10 +100,10 @@ class HybridAnalysisTest(unittest.TestCase):
                 ),
             },
         ]
-        predictions = {0: [6, 3, 6]}
+        predictions = {0: {0: 6, 1: 3, 2: 6}}
         apply_temporal_smoothing(records, predictions, confidence_threshold=0.6)
         self.assertEqual(records[1]["final"].action, "defense")
-        self.assertEqual(predictions[0], [6, 6, 6])
+        self.assertEqual(predictions[0], {0: 6, 1: 6, 2: 6})
 
     def test_tracker_failure_fallback(self):
         from unittest.mock import patch, MagicMock
@@ -137,9 +137,9 @@ class HybridAnalysisTest(unittest.TestCase):
             
             self.assertEqual(len(frames), 3)
             self.assertEqual(len(player_boxes), 3)
-            self.assertEqual(player_boxes[0], ((10.0, 10.0, 20.0, 20.0),))
+            self.assertEqual(player_boxes[0], ((5.0, 5.0, 20.0, 20.0),))
             self.assertEqual(player_boxes[1], ((10.0, 10.0, 20.0, 20.0),))
-            self.assertEqual(player_boxes[2], ((30.0, 30.0, 20.0, 20.0),))
+            self.assertEqual(player_boxes[2], ((10.0, 10.0, 20.0, 20.0),))
 
     def test_crop_windows_n_clips_boundary(self):
         frames_17 = [np.zeros((10, 10, 3)) for _ in range(17)]
@@ -390,6 +390,186 @@ class HybridAnalysisTest(unittest.TestCase):
         apply_temporal_smoothing(records, predictions, confidence_threshold=0.6)
         self.assertEqual(records[1]["final"].action, "defense")
         self.assertEqual(predictions[0][4], 6)
+
+    def test_video_capture_release_on_error(self):
+        from unittest.mock import patch, MagicMock
+        import cv2
+        from app.analysis.service import AnalysisService
+        from app.analysis.schemas import AnalysisRequest
+        from app.config import Settings
+
+        mock_cap = MagicMock()
+        mock_cap.isOpened.return_value = True
+        mock_cap.get.side_effect = Exception("Mock CAP error")
+
+        with patch('cv2.VideoCapture', return_value=mock_cap), \
+             patch('app.analysis.service.extract_tracked_frames') as mock_etf, \
+             patch('app.analysis.service.crop_windows') as mock_cw, \
+             patch('app.analysis.service.predict_player_clips') as mock_ppc, \
+             patch('app.analysis.service.write_annotated_video') as mock_wav:
+
+             mock_etf.return_value = ([], {}, 100, 100, [])
+             mock_cw.return_value = {}
+             mock_ppc.return_value = {}
+
+             settings = Settings(video_output_dir="dummy_out")
+             service = AnalysisService(settings=settings, model=MagicMock(), device="cpu")
+
+             request = AnalysisRequest(
+                 video_path="dummy.mp4",
+                 vlm_mode="off",
+                 generate_video=True
+             )
+
+             with self.assertRaises(Exception) as context:
+                 service.run_analysis(request)
+
+             self.assertIn("Mock CAP error", str(context.exception))
+             mock_cap.release.assert_called_once()
+
+    def test_fuse_vlm_action_unknown_label(self):
+        from app.analysis.fusion import fuse_decision
+        from app.analysis.schemas import ModelPrediction, VLMDecisionResponse
+
+        prediction = ModelPrediction(
+            action_id=6,
+            action="defense",
+            confidence=0.5,
+            probabilities={"defense": 0.5}
+        )
+        vlm = VLMDecisionResponse(
+            available=True,
+            action="unknown_vlm_action_name",
+            confidence=0.9,
+            needs_review=False,
+            reason="VLM proposed an action not in LABEL_TO_ID",
+            visible_ball=False,
+            raw_response="{}",
+        )
+
+        decision = fuse_decision(
+            prediction=prediction,
+            vlm=vlm,
+            high_confidence=0.8,
+            low_confidence=0.4
+        )
+
+        self.assertEqual(decision.action_id, prediction.action_id)
+        self.assertEqual(decision.action, prediction.action)
+        self.assertEqual(decision.confidence, prediction.confidence)
+        self.assertEqual(decision.source, "r2plus1d")
+        self.assertIn("VLM returned unknown action label", decision.reason)
+
+    def test_path_traversal_symlink(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from unittest.mock import patch, MagicMock
+
+        with patch('app.main.build_r2plus1d_model', return_value=MagicMock()):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/v1/analysis/run",
+                    json={
+                        "video_path": "/tmp/outside_file.mp4",
+                        "vlm_mode": "off",
+                    }
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("Access denied", response.json()["detail"])
+
+    def test_end_frame_clamped(self):
+        from unittest.mock import patch, MagicMock
+        import numpy as np
+        from app.analysis.service import AnalysisService
+        from app.analysis.schemas import AnalysisRequest
+        from app.config import Settings
+        from app.analysis.schemas import ModelPrediction
+
+        dummy_frames = [np.zeros((10, 10, 3), dtype=np.uint8) for _ in range(5)]
+
+        with patch('app.analysis.service.extract_tracked_frames') as mock_etf, \
+             patch('app.analysis.service.crop_windows') as mock_cw, \
+             patch('app.analysis.service.predict_player_clips') as mock_ppc:
+
+             mock_etf.return_value = (dummy_frames, [((0.0, 0.0, 10.0, 10.0),)] * 5, 100, 100, [])
+             mock_cw.return_value = {0: [np.zeros((16, 10, 10, 3))]}
+             mock_ppc.return_value = {0: [ModelPrediction(action_id=0, action="run", confidence=0.9, probabilities={"run": 0.9})]}
+
+             settings = Settings(seq_length=16, vid_stride=8)
+             service = AnalysisService(settings=settings, model=MagicMock(), device="cpu")
+
+             request = AnalysisRequest(
+                 video_path="dummy.mp4",
+                 vlm_mode="off",
+                 generate_video=False
+             )
+
+             response = service.run_analysis(request)
+             self.assertEqual(len(response.records), 1)
+             self.assertEqual(response.records[0].end_frame, 4)
+
+    def test_writer_unknown_action_id(self):
+        from unittest.mock import patch, MagicMock
+        import numpy as np
+        from app.video.writer import write_annotated_video
+
+        frames = [np.zeros((100, 100, 3), dtype=np.uint8)]
+        boxes = [[(10.0, 10.0, 20.0, 20.0)]]
+        predictions = {0: {0: 999}}
+        colors = [(255, 0, 0)]
+
+        with patch('cv2.VideoWriter') as mock_writer, \
+             patch('cv2.putText') as mock_put_text:
+
+             mock_out = MagicMock()
+             mock_writer.return_value = mock_out
+
+             write_annotated_video(
+                 video_path="dummy_out.mp4",
+                 video_frames=frames,
+                 player_boxes=boxes,
+                 predictions=predictions,
+                 colors=colors,
+                 frame_width=100,
+                 frame_height=100,
+                 vid_stride=8
+             )
+
+             mock_put_text.assert_called()
+             called_args = mock_put_text.call_args[0]
+             self.assertEqual(called_args[1], "unknown")
+
+    def test_temporal_smoothing_dict_not_list(self):
+        from app.analysis.fusion import apply_temporal_smoothing
+        from app.analysis.schemas import FinalDecisionResponse
+
+        records = [
+            {
+                "player": 0,
+                "clip_index": 0,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.7, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 1,
+                "final": FinalDecisionResponse(
+                    action_id=3, action="dribble", confidence=0.3, source="r2plus1d", needs_review=True, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 2,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.8, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+        ]
+        predictions = {0: {0: 6, 1: 3, 2: 6}}
+        apply_temporal_smoothing(records, predictions, confidence_threshold=0.6)
+        self.assertEqual(records[1]["final"].action, "defense")
+        self.assertEqual(predictions[0][1], 6)
 
 
 if __name__ == "__main__":
