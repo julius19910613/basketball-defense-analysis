@@ -1,0 +1,236 @@
+import unittest
+import numpy as np
+
+from app.analysis.schemas import ModelPrediction, VLMDecisionResponse, FinalDecisionResponse
+from app.analysis.vlm import extract_json_object, normalize_action
+from app.analysis.fusion import fuse_decision, should_call_vlm, apply_temporal_smoothing
+from app.analysis.tracking import crop_windows
+
+
+class HybridAnalysisTest(unittest.TestCase):
+    def make_prediction(self, action="dribble", confidence=0.4):
+        action_ids = {
+            "block": 0,
+            "pass": 1,
+            "run": 2,
+            "dribble": 3,
+            "shoot": 4,
+            "ball in hand": 5,
+            "defense": 6,
+            "pick": 7,
+            "no_action": 8,
+            "walk": 9,
+        }
+        return ModelPrediction(
+            action_id=action_ids[action],
+            action=action,
+            confidence=confidence,
+            probabilities={action: confidence},
+        )
+
+    def test_extract_json_object_accepts_wrapped_json(self):
+        parsed = extract_json_object('Here is the result: {"action": "shoot", "confidence": 0.7}')
+        self.assertEqual(parsed["action"], "shoot")
+        self.assertEqual(parsed["confidence"], 0.7)
+
+    def test_normalize_action_maps_aliases(self):
+        self.assertEqual(normalize_action("ball_in_hand"), "ball in hand")
+        self.assertEqual(normalize_action("no action"), "no_action")
+        self.assertEqual(normalize_action("defence"), "defense")
+        self.assertIsNone(normalize_action("guarding"))
+
+    def test_fuse_uses_r2plus1d_when_vlm_unavailable(self):
+        prediction = self.make_prediction("shoot", 0.8)
+        final = fuse_decision(prediction, None, high_confidence=0.75, low_confidence=0.55)
+        self.assertEqual(final.action, "shoot")
+        self.assertEqual(final.source, "r2plus1d")
+        self.assertFalse(final.needs_review)
+
+    def test_fuse_vlm_override_for_low_confidence_prediction(self):
+        prediction = self.make_prediction("dribble", 0.35)
+        vlm = VLMDecisionResponse(
+            action="defense",
+            confidence=0.72,
+            reason="No ball is visible and stance is defensive.",
+            visible_ball=False,
+            needs_review=False,
+            raw_response="{}",
+            available=True,
+        )
+        final = fuse_decision(prediction, vlm, high_confidence=0.75, low_confidence=0.55)
+        self.assertEqual(final.action, "defense")
+        self.assertEqual(final.source, "vlm_override")
+
+    def test_should_call_vlm_respects_mode_and_limit(self):
+        low_prediction = self.make_prediction("dribble", 0.4)
+        high_prediction = self.make_prediction("shoot", 0.9)
+        self.assertTrue(should_call_vlm("low-confidence", low_prediction, 0.55, 0, 2))
+        self.assertFalse(should_call_vlm("low-confidence", high_prediction, 0.55, 0, 2))
+        self.assertFalse(should_call_vlm("off", low_prediction, 0.55, 0, 2))
+        self.assertFalse(should_call_vlm("always", low_prediction, 0.55, 2, 2))
+
+    def test_crop_windows_pads_short_tail(self):
+        frames = [np.full((32, 32, 3), fill_value=index, dtype=np.uint8) for index in range(10)]
+        boxes = [[(0, 0, 16, 16)]] * 10
+        windows = crop_windows(frames, boxes, seq_length=4, vid_stride=3)
+        self.assertEqual(len(windows[0]), 3)
+        self.assertEqual(windows[0][0].shape, (4, 176, 128, 3))
+
+    def test_temporal_smoothing_replaces_isolated_low_confidence_label(self):
+        records = [
+            {
+                "player": 0,
+                "clip_index": 0,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.7, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 1,
+                "final": FinalDecisionResponse(
+                    action_id=3, action="dribble", confidence=0.3, source="r2plus1d", needs_review=True, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 2,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.8, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+        ]
+        predictions = {0: [6, 3, 6]}
+        apply_temporal_smoothing(records, predictions, confidence_threshold=0.6)
+        self.assertEqual(records[1]["final"].action, "defense")
+        self.assertEqual(predictions[0], [6, 6, 6])
+
+    def test_tracker_failure_fallback(self):
+        from unittest.mock import patch, MagicMock
+        with patch('cv2.VideoCapture') as mock_vc, \
+             patch('cv2.legacy.MultiTracker_create') as mock_mt:
+            
+            mock_cap = MagicMock()
+            mock_cap.read.side_effect = [
+                (True, np.zeros((100, 100, 3), dtype=np.uint8)),
+                (True, np.zeros((100, 100, 3), dtype=np.uint8)),
+                (True, np.zeros((100, 100, 3), dtype=np.uint8)),
+                (False, None)
+            ]
+            mock_vc.return_value = mock_cap
+            
+            mock_tracker = MagicMock()
+            mock_tracker.update.side_effect = [
+                (True, [(10, 10, 20, 20)]),
+                (False, []),
+                (True, [(30, 30, 20, 20)]),
+            ]
+            mock_mt.return_value = mock_tracker
+            
+            from app.analysis.tracking import extract_tracked_frames
+            frames, player_boxes, w, h, colors = extract_tracked_frames(
+                video_path="dummy.mp4",
+                tracker_type="CSRT",
+                headless=True,
+                boxes=[(5, 5, 20, 20)]
+            )
+            
+            self.assertEqual(len(frames), 3)
+            self.assertEqual(len(player_boxes), 3)
+            self.assertEqual(player_boxes[0], ((10.0, 10.0, 20.0, 20.0),))
+            self.assertEqual(player_boxes[1], ((10.0, 10.0, 20.0, 20.0),))
+            self.assertEqual(player_boxes[2], ((30.0, 30.0, 20.0, 20.0),))
+
+    def test_crop_windows_n_clips_boundary(self):
+        frames_17 = [np.zeros((10, 10, 3)) for _ in range(17)]
+        boxes_17 = [[(0, 0, 5, 5)]] * 17
+        windows_17 = crop_windows(frames_17, boxes_17, seq_length=16, vid_stride=8)
+        self.assertEqual(len(windows_17[0]), 2)
+
+        frames_25 = [np.zeros((10, 10, 3)) for _ in range(25)]
+        boxes_25 = [[(0, 0, 5, 5)]] * 25
+        windows_25 = crop_windows(frames_25, boxes_25, seq_length=16, vid_stride=8)
+        self.assertEqual(len(windows_25[0]), 3)
+
+    def test_vlm_verifier_only_uses_response_field(self):
+        import json
+        from unittest.mock import patch, MagicMock
+        from app.analysis.vlm import OllamaVLMVerifier
+        from app.analysis.schemas import MotionFeatures
+        
+        verifier = OllamaVLMVerifier(model="test-model", host="http://localhost:11434")
+        
+        with patch('urllib.request.urlopen') as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps({
+                "response": '{"action": "shoot", "confidence": 0.95, "reason": "visible shot"}',
+                "thinking": 'Let me think about this. The player is shooting...'
+            }).encode('utf-8')
+            mock_urlopen.return_value.__enter__.return_value = mock_resp
+            
+            motion = MotionFeatures(
+                avg_center_speed=1.0, max_center_speed=2.0, avg_box_area=100.0, area_change_ratio=1.0
+            )
+            prediction = self.make_prediction("shoot", 0.95)
+            
+            frames = [np.zeros((128, 176, 3), dtype=np.uint8)]
+            vlm_decision = verifier.verify(frames, prediction, motion)
+            
+            self.assertTrue(vlm_decision.available)
+            self.assertEqual(vlm_decision.action, "shoot")
+            self.assertEqual(vlm_decision.confidence, 0.95)
+            self.assertEqual(vlm_decision.reason, "visible shot")
+            
+            mock_resp.read.return_value = json.dumps({
+                "thinking": '{"action": "shoot", "confidence": 0.95}'
+            }).encode('utf-8')
+            
+            vlm_decision2 = verifier.verify(frames, prediction, motion)
+            self.assertIsNone(vlm_decision2.action)
+
+    def test_lifespan_mounts_static_directories_with_absolute_paths(self):
+        from unittest.mock import patch, MagicMock
+        from app.main import lifespan
+        from fastapi import FastAPI
+        
+        app = FastAPI()
+        
+        with patch('app.main.build_r2plus1d_model'), \
+             patch('app.main.init_globals'), \
+             patch('os.makedirs') as mock_makedirs, \
+             patch('os.path.isdir', return_value=True), \
+             patch('os.path.abspath') as mock_abspath, \
+             patch.object(app, 'mount') as mock_mount, \
+             patch('app.main.get_settings') as mock_get_settings:
+            
+            mock_settings = MagicMock()
+            mock_settings.output_dir = "rel_output"
+            mock_settings.video_output_dir = "rel_video_output"
+            mock_get_settings.return_value = mock_settings
+            
+            mock_abspath.side_effect = lambda x: f"/abs/{x}"
+            
+            import anyio
+            async def run_lifespan():
+                async with lifespan(app):
+                    pass
+            
+            anyio.run(run_lifespan)
+            
+            mock_abspath.assert_any_call("rel_output")
+            mock_abspath.assert_any_call("rel_video_output")
+            mock_makedirs.assert_any_call("/abs/rel_output", exist_ok=True)
+            mock_makedirs.assert_any_call("/abs/rel_video_output", exist_ok=True)
+            
+            self.assertEqual(mock_mount.call_count, 2)
+            first_call_args = mock_mount.call_args_list[0]
+            second_call_args = mock_mount.call_args_list[1]
+            
+            self.assertEqual(first_call_args[0][0], "/static/outputs")
+            self.assertEqual(first_call_args[0][1].directory, "/abs/rel_output")
+            self.assertEqual(second_call_args[0][0], "/static/videos")
+            self.assertEqual(second_call_args[0][1].directory, "/abs/rel_video_output")
+
+
+if __name__ == "__main__":
+    unittest.main()

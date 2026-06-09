@@ -59,6 +59,7 @@ venv.bak/
 # Project-specific paths
 model_checkpoints/
 output_videos/
+analysis_outputs/
 scratch/
 examples/*.gif
 
@@ -70,3 +71,5 @@ examples/*.gif
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+.env
