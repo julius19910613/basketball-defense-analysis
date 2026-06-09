@@ -103,6 +103,8 @@ def extract_tracked_frames(
     """
     cap = cv2.VideoCapture(video_path)
     try:
+        if not cap.isOpened():
+            raise RuntimeError(f"Failed to open video: {video_path}")
         success, first_frame = cap.read()
         if not success:
             raise RuntimeError(f"Failed to read video: {video_path}")

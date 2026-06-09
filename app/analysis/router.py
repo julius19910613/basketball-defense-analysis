@@ -24,7 +24,10 @@ def run_analysis(
     video_path = request.video_path
     real_cwd = os.path.realpath(os.getcwd())
     real_video_path = os.path.realpath(video_path)
-    if not real_video_path.startswith(real_cwd):
+    try:
+        if os.path.commonpath([real_cwd, real_video_path]) != real_cwd:
+            raise HTTPException(status_code=400, detail="Access denied: Invalid video path.")
+    except ValueError:
         raise HTTPException(status_code=400, detail="Access denied: Invalid video path.")
 
     if not os.path.exists(video_path):

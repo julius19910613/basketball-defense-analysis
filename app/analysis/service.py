@@ -149,10 +149,11 @@ class AnalysisService:
             fps = 30.0
             cap = cv2.VideoCapture(request.video_path)
             try:
-                if cap.isOpened():
-                    val = cap.get(cv2.CAP_PROP_FPS)
-                    if val is not None and val > 0:
-                        fps = val
+                if not cap.isOpened():
+                    raise RuntimeError(f"Failed to open video for FPS extraction: {request.video_path}")
+                val = cap.get(cv2.CAP_PROP_FPS)
+                if val is not None and val > 0:
+                    fps = val
             finally:
                 cap.release()
 
