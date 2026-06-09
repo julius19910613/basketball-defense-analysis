@@ -85,7 +85,7 @@ def should_call_vlm(
 
 def apply_temporal_smoothing(
     records: List[Dict[str, Any]],
-    final_prediction_ids: Dict[int, List[int]],
+    final_prediction_ids: Dict[int, Dict[int, int]],
     confidence_threshold: float,
 ) -> None:
     """Apply temporal smoothing to fix isolated low-confidence predictions."""

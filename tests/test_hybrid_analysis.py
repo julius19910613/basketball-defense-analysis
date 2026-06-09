@@ -231,6 +231,166 @@ class HybridAnalysisTest(unittest.TestCase):
             self.assertEqual(second_call_args[0][0], "/static/videos")
             self.assertEqual(second_call_args[0][1].directory, "/abs/rel_video_output")
 
+    def test_crop_video_resize_failure_idx_zero(self):
+        import cv2
+        from unittest.mock import patch
+        from app.analysis.tracking import crop_video
+
+        clip = [np.zeros((10, 10, 3), dtype=np.uint8)]
+        crop_window = [[(0, 0, 5, 5)]]
+        
+        with patch('cv2.resize', side_effect=cv2.error("Mocked resize error")):
+            result = crop_video(clip, crop_window, player=0, output_size=(128, 176))
+            
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].shape, (176, 128, 3))
+        self.assertTrue(np.all(result[0] == 0))
+
+    def test_motion_features_invalid_player_index(self):
+        from app.analysis.motion import compute_motion_features
+        player_boxes = [[[(0.0, 0.0, 10.0, 10.0)]]]
+        with self.assertRaises(IndexError):
+            compute_motion_features(
+                player_boxes=player_boxes,
+                player=2,
+                clip_index=0,
+                seq_length=1,
+                vid_stride=1,
+            )
+
+    def test_write_annotated_video_player_count_mismatch(self):
+        from app.video.writer import write_annotated_video
+        import tempfile
+        import shutil
+        import os
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            video_path = os.path.join(temp_dir, "test_out.mp4")
+            video_frames = [np.zeros((100, 100, 3), dtype=np.uint8)]
+            player_boxes = [[
+                (10, 10, 20, 20),
+                (30, 30, 20, 20),
+                (50, 50, 20, 20),
+            ]]
+            predictions = {
+                0: {0: 1},
+                2: {0: 3},
+                5: {0: 4},
+            }
+            colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+            
+            write_annotated_video(
+                video_path=video_path,
+                video_frames=video_frames,
+                player_boxes=player_boxes,
+                predictions=predictions,
+                colors=colors,
+                frame_width=100,
+                frame_height=100,
+                vid_stride=8,
+                fps=30.0,
+            )
+            self.assertTrue(os.path.exists(video_path))
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_writer_clip_index_overflow(self):
+        from app.video.writer import write_annotated_video
+        import tempfile
+        import shutil
+        import os
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            video_path = os.path.join(temp_dir, "test_overflow.mp4")
+            video_frames = [np.zeros((100, 100, 3), dtype=np.uint8) for _ in range(20)]
+            player_boxes = [[(10, 10, 20, 20)]] * 20
+            
+            predictions_list = {
+                0: [1, 2]
+            }
+            
+            predictions_dict = {
+                0: {0: 1, 1: 3}
+            }
+            
+            colors = [(255, 0, 0)]
+            
+            write_annotated_video(
+                video_path=video_path,
+                video_frames=video_frames,
+                player_boxes=player_boxes,
+                predictions=predictions_list,
+                colors=colors,
+                frame_width=100,
+                frame_height=100,
+                vid_stride=8,
+                fps=30.0,
+            )
+            self.assertTrue(os.path.exists(video_path))
+            
+            write_annotated_video(
+                video_path=video_path,
+                video_frames=video_frames,
+                player_boxes=player_boxes,
+                predictions=predictions_dict,
+                colors=colors,
+                frame_width=100,
+                frame_height=100,
+                vid_stride=8,
+                fps=30.0,
+            )
+            self.assertTrue(os.path.exists(video_path))
+        finally:
+            shutil.rmtree(temp_dir)
+
+    def test_path_traversal_video_path(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from unittest.mock import patch, MagicMock
+        
+        with patch('app.main.build_r2plus1d_model', return_value=MagicMock()):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/v1/analysis/run",
+                    json={
+                        "video_path": "../suspicious_file.mp4",
+                        "vlm_mode": "off",
+                    }
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("Access denied", response.json()["detail"])
+
+    def test_temporal_smoothing_non_contiguous_indices(self):
+        records = [
+            {
+                "player": 0,
+                "clip_index": 0,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.7, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 4,
+                "final": FinalDecisionResponse(
+                    action_id=3, action="dribble", confidence=0.3, source="r2plus1d", needs_review=True, reason=""
+                ),
+            },
+            {
+                "player": 0,
+                "clip_index": 8,
+                "final": FinalDecisionResponse(
+                    action_id=6, action="defense", confidence=0.8, source="r2plus1d", needs_review=False, reason=""
+                ),
+            },
+        ]
+        predictions = {0: {0: 6, 4: 3, 8: 6}}
+        apply_temporal_smoothing(records, predictions, confidence_threshold=0.6)
+        self.assertEqual(records[1]["final"].action, "defense")
+        self.assertEqual(predictions[0][4], 6)
+
 
 if __name__ == "__main__":
     unittest.main()

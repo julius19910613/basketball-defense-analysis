@@ -715,11 +715,11 @@ def run_hybrid_analysis(args: argparse.Namespace) -> Dict[str, Any]:
         )
 
     output_records: List[Dict[str, Any]] = []
-    final_prediction_ids: Dict[int, List[int]] = {}
+    final_prediction_ids: Dict[int, Dict[int, int]] = {}
     vlm_used_count = 0
 
     for player, player_predictions in predictions.items():
-        final_prediction_ids[player] = []
+        final_prediction_ids[player] = {}
         for clip_index, prediction in enumerate(player_predictions):
             motion = compute_motion_features(
                 player_boxes,
@@ -746,7 +746,7 @@ def run_hybrid_analysis(args: argparse.Namespace) -> Dict[str, Any]:
                 high_confidence=args.high_confidence,
                 low_confidence=args.low_confidence,
             )
-            final_prediction_ids[player].append(final.action_id)
+            final_prediction_ids[player][clip_index] = final.action_id
             output_records.append(
                 build_output_record(
                     player,
@@ -792,7 +792,7 @@ def run_hybrid_analysis(args: argparse.Namespace) -> Dict[str, Any]:
 
 def apply_temporal_smoothing(
     records: List[Dict[str, Any]],
-    final_prediction_ids: Dict[int, List[int]],
+    final_prediction_ids: Dict[int, Dict[int, int]],
     confidence_threshold: float,
 ) -> None:
     by_player: Dict[int, List[Dict[str, Any]]] = {}

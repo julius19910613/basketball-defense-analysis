@@ -21,8 +21,14 @@ def run_analysis(
     settings: Settings = Depends(get_settings),
 ) -> AnalysisResponse:
     """Run a hybrid video analysis blockingly (CPU-bound)."""
-    if not os.path.exists(request.video_path):
-        raise HTTPException(status_code=400, detail=f"Video file not found: {request.video_path}")
+    video_path = request.video_path
+    project_root = os.path.abspath(os.getcwd())
+    abs_video_path = os.path.abspath(video_path)
+    if ".." in video_path or not abs_video_path.startswith(project_root):
+        raise HTTPException(status_code=400, detail="Access denied: Invalid video path.")
+
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=400, detail=f"Video file not found: {video_path}")
     
     if request.boxes_file and not os.path.exists(request.boxes_file):
         raise HTTPException(status_code=400, detail=f"Boxes file not found: {request.boxes_file}")
@@ -30,6 +36,6 @@ def run_analysis(
     try:
         return service.run_analysis(request)
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+        import logging
+        logging.getLogger("app.analysis.router").error("Analysis failed: %s", str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error")

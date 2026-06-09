@@ -73,11 +73,11 @@ class AnalysisService:
 
         # 5. Fusion & Verification
         output_records: List[Dict[str, Any]] = []
-        final_prediction_ids: Dict[int, List[int]] = {}
+        final_prediction_ids: Dict[int, Dict[int, int]] = {}
         vlm_used_count = 0
 
         for player, player_predictions in predictions.items():
-            final_prediction_ids[player] = []
+            final_prediction_ids[player] = {}
             for clip_index, prediction in enumerate(player_predictions):
                 motion = compute_motion_features(
                     player_boxes,
@@ -109,7 +109,7 @@ class AnalysisService:
                     high_confidence=self.settings.high_confidence,
                     low_confidence=self.settings.low_confidence,
                 )
-                final_prediction_ids[player].append(final.action_id)
+                final_prediction_ids[player][clip_index] = final.action_id
                 
                 output_records.append({
                     "player": player,
@@ -141,15 +141,19 @@ class AnalysisService:
             summary=AnalysisSummaryResponse(**summary_dict),
         )
 
-        # 7. Persistence
-        os.makedirs(self.settings.output_dir, exist_ok=True)
         analysis_id = str(uuid4().hex)
-        json_path = os.path.join(self.settings.output_dir, f"{analysis_id}.json")
-        with open(json_path, "w") as fp:
-            fp.write(response.model_dump_json(indent=2))
 
-        # 8. Video Generation
+        # 8. Video Generation (Write video first to avoid orphan JSON on failure)
         if request.generate_video:
+            import cv2
+            fps = 30.0
+            cap = cv2.VideoCapture(request.video_path)
+            if cap.isOpened():
+                val = cap.get(cv2.CAP_PROP_FPS)
+                if val is not None and val > 0:
+                    fps = val
+                cap.release()
+
             video_name = os.path.basename(request.video_path).split(".")[0]
             video_output_path = os.path.join(self.settings.video_output_dir, f"{video_name}_{analysis_id}.mp4")
             write_annotated_video(
@@ -161,6 +165,13 @@ class AnalysisService:
                 frame_width=width,
                 frame_height=height,
                 vid_stride=self.settings.vid_stride,
+                fps=fps,
             )
+
+        # 7. Persistence
+        os.makedirs(self.settings.output_dir, exist_ok=True)
+        json_path = os.path.join(self.settings.output_dir, f"{analysis_id}.json")
+        with open(json_path, "w") as fp:
+            fp.write(response.model_dump_json(indent=2))
 
         return response

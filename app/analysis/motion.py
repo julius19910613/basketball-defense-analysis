@@ -28,6 +28,9 @@ def compute_motion_features(
     """
     start = clip_index * vid_stride
     window = player_boxes[start : start + seq_length]
+    for frame_boxes in window:
+        if player < 0 or player >= len(frame_boxes):
+            raise IndexError(f"Player index {player} out of bounds for frame boxes of length {len(frame_boxes)}")
     boxes = [np.asarray(frame_boxes[player], dtype=float) for frame_boxes in window]
     if not boxes:
         return MotionFeatures(

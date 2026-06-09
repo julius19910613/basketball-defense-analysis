@@ -127,7 +127,7 @@ def extract_tracked_frames(
 
         colors: List[Tuple[int, int, int]] = [(255, 0, 0), (0, 0, 255), (0, 180, 0), (255, 160, 0)]
         while len(colors) < len(init_boxes):
-            colors.append(tuple(int(v) for v in np.random.randint(0, 255, size=3)))
+            colors.append(tuple(int(x) for x in np.random.randint(0, 256, size=3).tolist()))
 
         trackers = cv2.legacy.MultiTracker_create()
         for box in init_boxes:
@@ -186,7 +186,7 @@ def crop_video(
         try:
             resized = cv2.resize(cropped, dsize=(w_out, h_out), interpolation=cv2.INTER_NEAREST)
         except cv2.error:
-            resized = video[idx - 1] if video else np.zeros((h_out, w_out, 3), dtype=np.uint8)
+            resized = video[idx - 1] if (idx > 0 and video) else np.zeros((h_out, w_out, 3), dtype=np.uint8)
         video.append(resized)
     return video
 
