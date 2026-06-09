@@ -31,7 +31,8 @@ class Settings(BaseSettings):
     seq_length: int = 16
     vid_stride: int = 8
     batch_size: int = 8
-    tracker_type: str = "CSRT"
+    tracker_type: str = "YOLO"  # CSRT | YOLO
+    yolo_model_name: str = "yolov8n.pt"
     default_video: str = "examples/lebron_shoots.mp4"
 
     # --- VLM (Ollama) ---
@@ -44,8 +45,8 @@ class Settings(BaseSettings):
     max_vlm_clips: int = 8
 
     # --- Confidence thresholds ---
-    low_confidence: float = 0.55
-    high_confidence: float = 0.75
+    low_confidence: float = 0.45
+    high_confidence: float = 0.70
     smoothing_confidence: float = 0.6
 
     # --- Output directories ---

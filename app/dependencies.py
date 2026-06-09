@@ -39,3 +39,10 @@ def get_analysis_service(
     device: Annotated[torch.device, Depends(get_device)],
 ) -> AnalysisService:
     return AnalysisService(settings=settings, model=model, device=device)
+
+
+from app.analysis.task_manager import TaskManager, get_task_manager
+
+def get_task_manager_dep() -> TaskManager:
+    return get_task_manager()
+

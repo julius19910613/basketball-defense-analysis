@@ -43,14 +43,23 @@ class AnalysisService:
             headless=True,
             boxes_file=request.boxes_file,
             max_frames=request.max_frames,
+            conf_thres=request.tracker_conf_thres,
+            iou_thres=request.tracker_iou_thres,
+            min_appear_ratio=request.tracker_min_appear_ratio,
+            min_appear_abs=request.tracker_min_appear_abs,
+            device=self.device,
         )
+
+        effective_vid_stride = request.vid_stride if request.vid_stride is not None else self.settings.vid_stride
+        effective_low_confidence = request.low_confidence if request.low_confidence is not None else self.settings.low_confidence
+        effective_high_confidence = request.high_confidence if request.high_confidence is not None else self.settings.high_confidence
         
         # 2. Window Cropping
         player_clips = crop_windows(
             video_frames,
             player_boxes,
             seq_length=self.settings.seq_length,
-            vid_stride=self.settings.vid_stride,
+            vid_stride=effective_vid_stride,
         )
         
         # 3. Model Inference
@@ -84,14 +93,14 @@ class AnalysisService:
                     player=player,
                     clip_index=clip_index,
                     seq_length=self.settings.seq_length,
-                    vid_stride=self.settings.vid_stride,
+                    vid_stride=effective_vid_stride,
                 )
                 
                 vlm_decision = None
                 if verifier and should_call_vlm(
                     request.vlm_mode,
                     prediction,
-                    self.settings.low_confidence,
+                    effective_low_confidence,
                     vlm_used_count,
                     self.settings.max_vlm_clips,
                 ):
@@ -106,16 +115,16 @@ class AnalysisService:
                 final = fuse_decision(
                     prediction,
                     vlm_decision,
-                    high_confidence=self.settings.high_confidence,
-                    low_confidence=self.settings.low_confidence,
+                    high_confidence=effective_high_confidence,
+                    low_confidence=effective_low_confidence,
                 )
                 final_prediction_ids[player][clip_index] = final.action_id
                 
                 output_records.append({
                     "player": player,
                     "clip_index": clip_index,
-                    "start_frame": clip_index * self.settings.vid_stride,
-                    "end_frame": min(clip_index * self.settings.vid_stride + self.settings.seq_length - 1, len(video_frames) - 1),
+                    "start_frame": clip_index * effective_vid_stride,
+                    "end_frame": min(clip_index * effective_vid_stride + self.settings.seq_length - 1, len(video_frames) - 1),
                     "r2plus1d": prediction,
                     "motion": motion,
                     "vlm": vlm_decision,
@@ -134,7 +143,7 @@ class AnalysisService:
             runtime_seconds=time.time() - started_at,
             frame_size=Size2D(width=width, height=height),
             seq_length=self.settings.seq_length,
-            vid_stride=self.settings.vid_stride,
+            vid_stride=effective_vid_stride,
             vlm_mode=request.vlm_mode,
             ollama_model=self.settings.ollama_model if request.vlm_mode != "off" else None,
             records=[AnalysisRecordResponse(**r) for r in output_records],
@@ -167,7 +176,7 @@ class AnalysisService:
                 colors=colors,
                 frame_width=width,
                 frame_height=height,
-                vid_stride=self.settings.vid_stride,
+                vid_stride=effective_vid_stride,
                 fps=fps,
             )
 

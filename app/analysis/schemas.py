@@ -79,6 +79,14 @@ class AnalysisRequest(BaseModel):
         default=True,
         description="If True, generates and saves an annotated output video."
     )
+    tracker_conf_thres: float = Field(default=0.3, description="YOLO detection confidence threshold (lower = more players).")
+    tracker_iou_thres: float = Field(default=0.6, description="YOLO NMS IOU threshold.")
+    tracker_min_appear_ratio: float = Field(default=0.02, description="Min ratio of frames a player must appear in (lower = more players).")
+    tracker_min_appear_abs: int = Field(default=5, description="Min absolute frame count to keep a player track.")
+    vid_stride: Optional[int] = Field(default=None, description="Override default vid_stride (lower = more clips).")
+    low_confidence: Optional[float] = Field(default=None, description="Override default low_confidence threshold.")
+    high_confidence: Optional[float] = Field(default=None, description="Override default high_confidence threshold.")
+
 
 
 class AnalysisResponse(BaseModel):
@@ -93,3 +101,18 @@ class AnalysisResponse(BaseModel):
     ollama_model: Optional[str]
     records: list[AnalysisRecordResponse]
     summary: AnalysisSummaryResponse
+
+
+class AnalysisRunAsyncResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+
+class AnalysisTaskStatusResponse(BaseModel):
+    task_id: str
+    status: str
+    progress: int
+    error: Optional[str] = None
+    result: Optional[AnalysisResponse] = None
+

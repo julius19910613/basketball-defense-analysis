@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """App lifespan context manager. Loads ML models on startup."""
     settings = get_settings()
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
     print(f"Loading R(2+1)D model on {device}...")
     model = build_r2plus1d_model(settings, device=device)
     init_globals(model=model, device=device)

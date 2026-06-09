@@ -572,5 +572,65 @@ class HybridAnalysisTest(unittest.TestCase):
         self.assertEqual(predictions[0][1], 6)
 
 
+    def test_async_analysis_flow(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from unittest.mock import patch, MagicMock
+        from app.analysis.task_manager import get_task_manager
+        from app.analysis.schemas import AnalysisResponse, Size2D, AnalysisSummaryResponse
+        
+        task_manager = get_task_manager()
+        
+        with patch('app.main.build_r2plus1d_model', return_value=MagicMock()), \
+             patch('os.path.exists', return_value=True):
+            
+            with TestClient(app) as client:
+                with patch('app.analysis.service.AnalysisService.run_analysis') as mock_run:
+                    dummy_response = AnalysisResponse(
+                        video="examples/lebron_shoots.mp4",
+                        created_at_unix=123456789.0,
+                        runtime_seconds=1.5,
+                        frame_size=Size2D(width=640, height=480),
+                        seq_length=16,
+                        vid_stride=8,
+                        vlm_mode="off",
+                        ollama_model=None,
+                        records=[],
+                        summary=AnalysisSummaryResponse(
+                            clip_count=0,
+                            action_counts={},
+                            needs_review_count=0,
+                            source_counts={}
+                        )
+                    )
+                    mock_run.return_value = dummy_response
+                    
+                    response = client.post(
+                        "/api/v1/analysis/run",
+                        json={
+                            "video_path": "examples/lebron_shoots.mp4",
+                            "vlm_mode": "off",
+                            "generate_video": False
+                        }
+                    )
+                    self.assertEqual(response.status_code, 200)
+                    data = response.json()
+                    self.assertIn("task_id", data)
+                    self.assertEqual(data["status"], "pending")
+                    
+                    task_id = data["task_id"]
+                    
+                    import time
+                    # Small wait to ensure background task completes or is polled safely
+                    time.sleep(0.5)
+                    
+                    status_response = client.get(f"/api/v1/analysis/status/{task_id}")
+                    self.assertEqual(status_response.status_code, 200)
+                    status_data = status_response.json()
+                    self.assertEqual(status_data["task_id"], task_id)
+                    self.assertIn(status_data["status"], ["pending", "processing", "completed"])
+
+
 if __name__ == "__main__":
     unittest.main()
+

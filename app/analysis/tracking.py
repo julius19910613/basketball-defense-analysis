@@ -81,6 +81,11 @@ def extract_tracked_frames(
     boxes: Optional[List[Tuple[int, int, int, int]]] = None,
     boxes_file: Optional[str] = None,
     max_frames: Optional[int] = None,
+    conf_thres: float = 0.3,
+    iou_thres: float = 0.6,
+    min_appear_ratio: float = 0.02,
+    min_appear_abs: int = 5,
+    device: Optional[str | torch.device] = None,
 ) -> Tuple[
     List[np.ndarray],
     List[Tuple[Tuple[float, float, float, float], ...]],
@@ -92,15 +97,119 @@ def extract_tracked_frames(
 
     Args:
         video_path: Path to the input video file.
-        tracker_type: OpenCV tracker algorithm name.
+        tracker_type: OpenCV tracker algorithm name or 'YOLO'.
         headless: If True, skip GUI-based ROI selection.
         boxes: Explicit initial bounding boxes. Takes priority over boxes_file.
         boxes_file: Path to a JSON file with initial bounding boxes.
         max_frames: Optional cap on the number of frames to process.
+        device: Torch compute device (used for YOLO).
 
     Returns:
         Tuple of (video_frames, player_boxes, width, height, colors).
     """
+    if tracker_type.upper() == "YOLO":
+        from ultralytics import YOLO
+        import torch
+
+        if device is None:
+            device = torch.device("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
+
+        # Load YOLOv8 Nano model
+        yolo_model = YOLO("yolov8n.pt")
+
+        # Run tracking using ByteTrack
+        results = yolo_model.track(
+            source=video_path,
+            tracker="bytetrack.yaml",
+            device=device,
+            classes=[0],  # Person only
+            persist=True,
+            stream=True,
+            verbose=False,
+            conf=conf_thres,
+            iou=iou_thres
+        )
+
+        video_frames: List[np.ndarray] = []
+        raw_track_data: List[Dict[int, Tuple[float, float, float, float]]] = []
+        appearance_counts: Dict[int, int] = {}
+
+        for idx, r in enumerate(results):
+            if max_frames is not None and idx >= max_frames:
+                break
+            
+            video_frames.append(r.orig_img.copy())
+
+            frame_boxes = {}
+            if r.boxes is not None and r.boxes.id is not None:
+                xywh = r.boxes.xywh.cpu().numpy()
+                ids = r.boxes.id.int().cpu().numpy()
+                for box, track_id in zip(xywh, ids):
+                    track_id = int(track_id)
+                    appearance_counts[track_id] = appearance_counts.get(track_id, 0) + 1
+                    
+                    x_center, y_center, w, h = box
+                    x = x_center - w / 2
+                    y = y_center - h / 2
+                    frame_boxes[track_id] = (float(x), float(y), float(w), float(h))
+            raw_track_data.append(frame_boxes)
+
+        if not video_frames:
+            raise RuntimeError("No frames extracted from video.")
+
+        height, width = video_frames[0].shape[:2]
+
+        # Filter track IDs appearing in at least 5% of frames or at least 15 frames
+        min_appearances = max(min_appear_abs, int(len(video_frames) * min_appear_ratio))
+        active_track_ids = [tid for tid, count in appearance_counts.items() if count >= min_appearances]
+        active_track_ids.sort()
+
+        if not active_track_ids:
+            if appearance_counts:
+                active_track_ids = [max(appearance_counts, key=appearance_counts.get)]
+            else:
+                active_track_ids = [0]
+
+        # Build final player_boxes
+        player_boxes: List[Tuple[Tuple[float, float, float, float], ...]] = []
+        last_known_boxes = {}
+        default_box = (float(width / 3), float(height / 3), float(width / 4), float(height / 2))
+
+        for tid in active_track_ids:
+            found = False
+            for frame_boxes in raw_track_data:
+                if tid in frame_boxes:
+                    last_known_boxes[tid] = frame_boxes[tid]
+                    found = True
+                    break
+            if not found:
+                last_known_boxes[tid] = default_box
+
+        for frame_boxes in raw_track_data:
+            current_frame_boxes = []
+            for tid in active_track_ids:
+                if tid in frame_boxes:
+                    box = frame_boxes[tid]
+                    last_known_boxes[tid] = box
+                else:
+                    box = last_known_boxes[tid]
+                current_frame_boxes.append(box)
+            player_boxes.append(tuple(current_frame_boxes))
+
+        colors: List[Tuple[int, int, int]] = [
+            (255, 0, 0),    # Red
+            (0, 0, 255),    # Blue
+            (0, 180, 0),    # Green
+            (255, 160, 0),  # Orange
+            (180, 0, 180),  # Purple
+            (0, 180, 180),  # Cyan
+        ]
+        while len(colors) < len(active_track_ids):
+            colors.append(tuple(int(x) for x in np.random.randint(0, 256, size=3).tolist()))
+
+        return video_frames, player_boxes, width, height, colors[: len(active_track_ids)]
+
+    # Original OpenCV multi-tracker path
     cap = cv2.VideoCapture(video_path)
     try:
         if not cap.isOpened():

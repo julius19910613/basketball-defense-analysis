@@ -73,3 +73,9 @@ ehthumbs.db
 Thumbs.db
 
 .env
+
+# Local untracked files and model weights
+yolov8n.pt
+analysis_output.json
+examples/adam.mp4
+
