@@ -1,78 +1,291 @@
-# Basketball-Action-Recognition
-Spatio-Temporal Classification of 🏀 Basketball Actions using 3D-CNN Models trained on the SpaceJam Dataset.
+# Basketball Defense Analysis
 
-**LeBron shooting over Deandre Jordan**
-![Lebron Shoots](examples/lebron_shoots.gif)
+Hybrid basketball video analysis with player tracking, R(2+1)D action
+classification, lightweight motion features, and optional Ollama VLM review.
 
-**Live Example**
-![](examples/live_basketball.gif)
+The project started from a SpaceJam basketball action recognition baseline and
+now includes a FastAPI service for asynchronous video analysis plus a
+Mac-friendly training script for fine-tuning the R(2+1)D model.
 
-## Motivation
-Utilizing the SpaceJam Basketball Action Dataset [Repo](https://github.com/simonefrancia/SpaceJam), I aim to create a model that takes a video of a basketball game to classify a given action for each of the players tracked with a bounding box. There are two essential parts for this program: R(2+1)D Model (Can be any 3D CNN architecture) and the player tracking. The deep learning framework used to train the network was PyTorch and the machine used to train the model was the Nvidia RTX 3060ti GPU.
+## What It Does
 
-This is a demo video from the SpaceJam Repo.
+- Tracks players in a basketball video with YOLOv8 + ByteTrack or OpenCV legacy
+  trackers.
+- Splits each player track into short 16-frame clips.
+- Classifies each clip into 10 basketball action labels with R(2+1)D.
+- Computes simple trajectory and box-motion features.
+- Optionally asks a local Ollama VLM to review low-confidence clips.
+- Fuses model, motion, and VLM evidence into a final action decision.
+- Writes JSON analysis results and optional annotated videos.
 
-[Demo Video](https://www.youtube.com/watch?v=PEziTgHx4cA)
+Supported action labels:
 
-## Action/Video Classification
-A pretrained baseline R(2+1)D CNN (pretrained on kinetics-400 dataset) from [torchvision.models](https://pytorch.org/vision/0.8/models.html) is used and further fine-tuned on the SpaceJam dataset. Any 3D CNN architecture can be used, but for this project it was decided that the R(2+1)D was a perfect balance in terms of number of parameters and overall model performance. It was also shown in the [paper](https://arxiv.org/pdf/1711.11248.pdf) that factorizing 3D convolutional filters into separate spatial and temporal dimensions, alongside residual learning yields significant gains in accuracy. The training was done at [train.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/train.py).
+```text
+0 block
+1 pass
+2 run
+3 dribble
+4 shoot
+5 ball in hand
+6 defense
+7 pick
+8 no_action
+9 walk
+```
 
-### Dataset
-As mentioned above, the SpaceJam Basketball Action Dataset was used to train the R(2+1)D CNN model for video/action classification of basketball actions. The [Repo](https://github.com/simonefrancia/SpaceJam) contains two datasets (clips->.mp4 files and joints -> .npy files) of basketball single-player actions. The size of the two final annotated datasets is about 32,560 examples. Custom dataloaders were used for the basketball dataset in the [dataset.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/dataset.py).
+## Current Architecture
 
-![alt text](https://raw.githubusercontent.com/simonefrancia/SpaceJam/master/.github/histogram.png)
+```text
+app/main.py                 FastAPI application
+app/analysis/router.py      Async API endpoints
+app/analysis/service.py     End-to-end analysis orchestration
+app/analysis/tracking.py    YOLO/ByteTrack and OpenCV tracking
+app/analysis/inference.py   R(2+1)D clip inference
+app/analysis/vlm.py         Ollama VLM verification client
+app/analysis/fusion.py      Final decision and temporal smoothing
+app/video/writer.py         Annotated video output
+train_mac.py                Mac/CPU/MPS-friendly training entrypoint
+dataset.py                  SpaceJam video dataset loader
+tests/                      Offline regression tests
+```
 
-#### Augmentations
-After reading the thesis [Classificazione di Azioni Cestistiche mediante Tecniche di Deep Learning](https://www.researchgate.net/publication/330534530_Classificazione_di_Azioni_Cestistiche_mediante_Tecniche_di_Deep_Learning), (Written by Simone Francia) it was determined that the poorest classes with examples less than 2000 examples were augmented. Dribble, Ball in Hand, Pass, Block, Pick and Shoot were among the classes that were augmented. Augmentations were applied by running the script [augment_videos.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/augment_videos.py) and saved in a given output directory. Translation and Rotation were the only augmentations applied. After applying the augmentations the dataset has 49,901 examples.
+There is also a legacy standalone script, `hybrid_analysis.py`, but new work
+should prefer the structured API under `app/`.
 
-##### Rotate
-![rotate](examples/0000000_flipped_rotate_330.gif)
-##### Translate
-![translate](examples/0000000_translate_32_0.gif)
+## Data And Model Files
 
-### Training
-The training was done at [train.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/train.py). The training was run for 25 epochs and with a batch size of 8. The model was trained with the classic 70/20/10 split. Where 70% of the data was use to train and 20% was used to validate the model. And, the rest of the 10% was used in the inference to test the final model. It was found that a learning rate of 0.0001 was better than a learning rate of 0.001.
+Large runtime artifacts are intentionally not tracked by git.
 
-#### Checkpointing
-Both history and checkpointing is done after every epoch with [checkpoints.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/utils/checkpoints.py) in the utils directory.
+Expected local layout:
 
-### Validation and Evaluation
-The final model was a R(2+1)D CNN trained on the additional augmented examples. For validation on the test set, the model at epoch 19 was used as it was the best performing model in terms of validation f1-score and accuracy. The model performs significantly better than the reported 73% in the thesis [Classificazione di Azioni Cestistiche mediante Tecniche di Deep Learning](https://www.researchgate.net/publication/330534530_Classificazione_di_Azioni_Cestistiche_mediante_Tecniche_di_Deep_Learning), acheiving 85% for both validation accuracy and test accuracy. The confusion matrix was attained using the [inference.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/inference.py) code. Further analysis on predictions and errors is done on [error_analysis.ipynb](https://github.com/hkair/Basketball-Action-Recognition/blob/master/error_analysis.ipynb) notebook.
+```text
+dataset/
+  annotation_dict.json
+  augmented_annotation_dict.json
+  examples/
+    *.mp4
 
-#### Confusion Matrix 
+model_checkpoints/
+  r2plus1d_augmented-2/
+  r2plus1d_v3/
 
-**- 0: Block, 1: Pass, 2: Run, 3: Dribble, 4: Shoot, 5: Ball in Hand, 6: Defence, 7: Pick, 8: No Action, 9: Walk**
+analysis_outputs/
+output_videos/
+histories/
+```
 
-##### Test on Training and Validation Set
-![training and validation](examples/epoch_19_checkpoint.png)
+Notes:
 
-##### Testing on the 10% of the leftover data.
-![confusion matrix](examples/confusion_matrix.png)
+- `dataset/`, `model_checkpoints/`, `analysis_outputs/`, `output_videos/`, and
+  local histories are runtime data.
+- `train_mac.py` can train with only `dataset/annotation_dict.json`; if
+  `dataset/augmented_annotation_dict.json` is missing, it falls back to the
+  original annotations.
+- The API model loader uses `BASKETBALL_MODEL_PATH`,
+  `BASKETBALL_START_EPOCH`, `BASKETBALL_LR`, and
+  `BASKETBALL_BASE_MODEL_NAME` to locate checkpoint weights.
 
-#### Inference Examples - Error Analysis
+## Setup
 
-|   State   |   Shooting   |   Dribble   |   Pass   |   Defence   |   Pick   |   Run   |   Walk   |   Block   |   No Action   |
-:----------:|:------------:|:-----------:|:--------:|:-----------:|:--------:|:-------:|:--------:|:---------:|:--------------:
-True | ![true_shoot](examples/true_shoot.gif) | ![true_dribbble](examples/true_dribble.gif) | ![true_pass](examples/true_pass.gif) | ![true_defence](examples/true_defence.gif) | ![true_pick](examples/true_pick.gif) | ![true_run](examples/true_run.gif) | ![true_walk](examples/true_walk.gif) | ![true_block](examples/true_block.gif) | ![true_no_action](examples/true_no_action.gif)
-False | ![false_shoot](examples/false_shoot.gif) | ![false_dribbble](examples/false_dribble.gif) | ![false_pass](examples/false_pass.gif) | ![false_defence](examples/false_defence.gif) | ![false_pick](examples/false_pick.gif) | ![false_run](examples/false_run.gif) | ![false_walk](examples/false_walk.gif) | ![false_block](examples/false_block.gif) | ![false_no_action](examples/false_no_action.gif)
+Use the existing virtual environment when working in this repository:
 
-## Player Tracking 
-All player tracking is done in [main.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/main.py). Players are tracked by manually selecting the ROI using the opencv TrackerCSRT_create() tracker. In theory, an unlimited amount of people or players can be tracked, but this will significantly increase the compute time. In the example above only 2 players, LeBron James (Offence) & Deandre Jordan (Defence) were tracked. A simple example of player tracking is available in [Basketball-Player-Tracker](https://github.com/hkair/Basketball-Player-Tracker).
+```bash
+source ./venv/bin/activate
+```
 
-## Output
-After extracting the bounding boxes from TrackerCSRT_create(), a cropped clip of 16 frames is used to classify the actions. The 16 frame length clip is determined by the vid_stride (Set to 8 in the example video above) which is set in the cropWindows() function in [main.py](https://github.com/hkair/Basketball-Action-Recognition/blob/master/main.py). Within the cropped window time frame the action is displayed on top of the bounding boxes to show the action of the tracked player.
+For a fresh environment, install the project dependencies needed by the current
+API and training paths:
 
-## Future Additions
-- Separate augmented examples from validation and only in training.
-- Utilize better player tracking methods. 
-- Restrict Box size to 176x128 (Or with similar Aspect Ratio), so resize of image is not applied.
-- Fully automate player tracking. Potentially using YOLO or any other Object Detection Models.
-- Play around with hyperparameters such as learning rates, batch size, layers frozen, etc.
-- Try various 3D-CNN Architectures or sequential models such as CONV-LSTMs.
-- Improve model to +90% accuracy and f1-score.
+```bash
+python -m pip install torch torchvision opencv-contrib-python fastapi uvicorn \
+  pydantic-settings ultralytics scikit-learn tqdm easydict numpy
+```
 
-Note:
-- The Model does not perform well with off-ball actions for some reason. Often times, the defender is classified to be dribbling when they are not. This might be because of the similarity of the stance while dribbling the ball and playing defence. For both movements, players generally lower their torsos forward in order to lower their centre of gravity.
+The historical `requirements.txt` is from the original upstream project and is
+not yet a complete lockfile for the current FastAPI + YOLO + Ollama workflow.
+
+Copy the sample environment file when you want to override defaults:
+
+```bash
+cp .env.example .env
+```
+
+Important environment variables use the `BASKETBALL_` prefix:
+
+```text
+BASKETBALL_MODEL_PATH=model_checkpoints/r2plus1d_augmented-2/
+BASKETBALL_TRACKER_TYPE=YOLO
+BASKETBALL_VLM_MODE=low-confidence
+BASKETBALL_OLLAMA_MODEL=qwen3-vl:4b
+BASKETBALL_OLLAMA_HOST=http://127.0.0.1:11434
+BASKETBALL_OUTPUT_DIR=analysis_outputs
+BASKETBALL_VIDEO_OUTPUT_DIR=output_videos
+```
+
+## Start The API
+
+```bash
+./venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8765
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8765/health
+```
+
+Interactive API docs:
+
+```text
+http://127.0.0.1:8765/docs
+```
+
+## Run A Video Analysis
+
+Start an asynchronous analysis task:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/analysis/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video_path": "examples/lebron_shoots.mp4",
+    "vlm_mode": "low-confidence",
+    "max_frames": 180,
+    "generate_video": true,
+    "tracker_conf_thres": 0.3,
+    "tracker_iou_thres": 0.6,
+    "tracker_min_appear_ratio": 0.02,
+    "tracker_min_appear_abs": 5
+  }'
+```
+
+Poll the returned task id:
+
+```bash
+curl http://127.0.0.1:8765/api/v1/analysis/status/<task_id>
+```
+
+Useful request options:
+
+- `vlm_mode`: `off`, `low-confidence`, or `always`
+- `boxes_file`: optional JSON boxes file for OpenCV tracker initialization
+- `max_frames`: cap frames for faster smoke tests
+- `generate_video`: write an annotated MP4 when true
+- `vid_stride`: lower values produce more clips
+- `low_confidence` and `high_confidence`: override fusion thresholds
+
+The service writes JSON reports under `analysis_outputs/` and annotated videos
+under `output_videos/`. Static files are served from:
+
+```text
+/static/outputs
+/static/videos
+```
+
+## Ollama VLM Review
+
+The VLM is optional. The non-LLM R(2+1)D model remains the primary classifier;
+the VLM is used as a bounded reviewer for uncertain clips.
+
+To enable VLM review locally:
+
+```bash
+ollama serve
+ollama pull qwen3-vl:4b
+```
+
+Then run API requests with:
+
+```json
+{"vlm_mode": "low-confidence"}
+```
+
+Fusion behavior:
+
+- If VLM is off or unavailable, keep the R(2+1)D prediction.
+- If VLM agrees, raise confidence conservatively.
+- If R(2+1)D confidence is high, keep it during conflicts and mark review.
+- If R(2+1)D confidence is low and VLM is confident, allow VLM override.
+- Isolated low-confidence temporal outliers can be smoothed to neighboring
+  labels.
+
+## Training
+
+`train_mac.py` is the current training entrypoint for local CPU/MPS/CUDA runs.
+It is designed to survive long-running local jobs:
+
+- auto-selects MPS, CUDA, or CPU unless `--device` is provided
+- uses small default batches for 16 GB Mac setups
+- skips corrupted/unreadable dataset samples instead of aborting the epoch
+- supports resume from `latest.pt` or `best.pt`
+- saves `best.pt` only when validation accuracy improves
+- supports `--save-best-only` to avoid epoch checkpoints and `latest.pt`
+
+Example:
+
+```bash
+./venv/bin/python train_mac.py \
+  --device mps \
+  --batch-size 2 \
+  --epochs 20 \
+  --lr 1e-4 \
+  --layers layer3 layer4 fc \
+  --annotation-path dataset/annotation_dict.json \
+  --augmented-path dataset/augmented_annotation_dict.json \
+  --video-dir dataset/examples/ \
+  --augmented-dir dataset/examples/ \
+  --model-dir model_checkpoints/r2plus1d_v3/ \
+  --history-path histories/history_r2plus1d_v3.txt \
+  --num-workers 0
+```
+
+Resume:
+
+```bash
+./venv/bin/python train_mac.py \
+  --resume model_checkpoints/r2plus1d_v3/latest.pt \
+  --model-dir model_checkpoints/r2plus1d_v3/ \
+  --history-path histories/history_r2plus1d_v3.txt
+```
+
+Check a training history file:
+
+```bash
+./venv/bin/python scripts/check_training.py \
+  --history-path histories/history_r2plus1d_v3.txt
+```
+
+## Testing
+
+The regression tests are offline and mock the expensive model/video paths where
+possible. They do not require SpaceJam data, a live Ollama server, or real
+checkpoint files.
+
+```bash
+./venv/bin/python -m pytest tests -q
+```
+
+Current expected result:
+
+```text
+37 passed
+```
+
+## Safety Notes
+
+- API video paths are checked so requests cannot read outside the repository
+  root through path traversal.
+- Analysis tasks run asynchronously and can be polled through the status
+  endpoint.
+- `pytest.ini` limits test discovery to `tests/`, so manual experiment scripts
+  are not collected accidentally.
+- Runtime outputs and datasets are ignored by git to avoid committing large or
+  machine-specific files.
 
 ## Credits
-Major thanks to [Simone Francia](https://github.com/simonefrancia) for the basketball action dataset and paper on action classification with 3D-CNNs. 
+
+The action recognition baseline and dataset context come from the SpaceJam
+basketball action dataset by Simone Francia and the original R(2+1)D
+basketball-action-recognition work. This repository extends that baseline with
+a local service, YOLO/ByteTrack tracking, Ollama VLM verification, checkpoint
+resilience, and focused regression tests.
