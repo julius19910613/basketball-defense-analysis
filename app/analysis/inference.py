@@ -27,12 +27,20 @@ LABEL_TO_ID = {value: key for key, value in LABELS.items()}
 def inference_batch(batch: torch.Tensor) -> torch.Tensor:
     """Prepare a batch of clips for R(2+1)D model inference.
 
+    Converts BGR→RGB, normalizes pixel values to [0, 1] (matching training
+    preprocessing in dataset.py VideoToTensor), and permutes to (B, C, T, H, W).
+
     Args:
-        batch: Tensor of shape (B, T, H, W, C).
+        batch: Tensor of shape (B, T, H, W, C) with BGR uint8 pixel values.
 
     Returns:
-        Tensor of shape (B, C, T, H, W).
+        Tensor of shape (B, C, T, H, W) with RGB float32 values in [0, 1].
     """
+    # BGR → RGB: reverse the channel dimension
+    batch = batch.flip(-1)
+    # Normalize to [0, 1] to match training preprocessing (dataset.py L191: frames /= 255)
+    batch = batch.float() / 255.0
+    # (B, T, H, W, C) → (B, C, T, H, W)
     return batch.permute(0, 4, 1, 2, 3)
 
 
